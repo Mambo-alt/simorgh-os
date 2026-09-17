@@ -15,10 +15,10 @@ black box.
 
 Simorgh boots real hardware (or QEMU) from a raw disk image, switches itself into
 32-bit Protected Mode by hand, brings up its own interrupt system, and drops you
-into an interactive shell — all without touching a single line of code that isn't
-in this repository.
+into an interactive shell with a real, directory-aware filesystem — all without
+touching a single line of code that isn't in this repository.
 
-simorgh> info
+simorgh:/> info
 Simorgh OS
 Version 0.2
 Architecture: x86
@@ -26,16 +26,33 @@ Kernel: Simorgh Kernel
 Filesystem: SimorghFS
 Shell: Simorgh Shell
 
-simorgh> help
+simorgh:/> mkdir docs
+Directory created.
+
+simorgh:/> cd docs
+simorgh:/docs> write notes.txt hello simorgh
+File written.
+
+simorgh:/docs> ls
+notes.txt
+
+simorgh:/docs> cd ..
+simorgh:/> ls
+docs/
+
+simorgh:/> help
 Commands:
 help - show this list
 info - show OS info
 clear - clear the screen
 echo <text> - print text
-ls - list files
+ls - list files/dirs
 cat <file> - show file content
-write <file> <t> - create/overwrite file with text
-rm <file> - delete a file
+write <file> <t>- create/overwrite file with text
+rm <name> - delete a file or empty dir
+mkdir <name> - create a directory
+cd <name> - change directory (.. or / supported)
+pwd - print current directory
 fstest - run filesystem self-test
 reboot - restart the system
 
@@ -53,12 +70,16 @@ reboot - restart the system
 - **Keyboard driver** — IRQ1-driven, full Shift/Caps support, backspace handling.
 - **Disk driver** — ATA PIO mode, direct port I/O, no BIOS calls once in
   Protected Mode.
-- **SimorghFS** — a small flat filesystem living on raw disk sectors: create,
-  read, write, delete, list. No inodes, no directories — just enough to be a
-  real, working filesystem.
+- **SimorghFS** — a flat-array filesystem living on raw disk sectors, with a
+  real directory tree on top of it: create, read, write, delete, list, `mkdir`,
+  `cd`, `pwd`. Up to 12 entries total (files + directories combined), each
+  tagged with a type and a parent, so `ls`/`cat`/`write`/`rm` are always scoped
+  to the current directory.
 - **Shell** — a command interpreter with clear, consistent error handling
   (`Unknown command`, `Error: file not found`, `Error: disk error`,
-  `Error: invalid filename`, `Error: invalid argument`, ...).
+  `Error: invalid filename`, `Error: not a directory`, `Error: directory not
+  empty`, ...), and a prompt that shows the current path
+  (`simorgh:/docs>`).
 
 ## Project structure
 
@@ -74,7 +95,7 @@ keyboard.c/h PS/2 keyboard driver
 isr_kb.asm IRQ1 stub
 
 disk.c/h ATA PIO disk driver
-fs.c/h SimorghFS filesystem
+fs.c/h SimorghFS filesystem (files + directories)
 shell.c/h Command shell
 
 linker.ld Kernel memory layout
@@ -89,48 +110,51 @@ linker.ld Kernel memory layout
 - `qemu-system-x86_64` (for testing)
 
 ### Build steps
+Compile the C sources
 
-```bash
-# Compile the C sources
-i686-elf-gcc -ffreestanding -c screen.c   -o screen.o
-i686-elf-gcc -ffreestanding -c idt.c      -o idt.o
+i686-elf-gcc -ffreestanding -c screen.c -o screen.o
+i686-elf-gcc -ffreestanding -c idt.c -o idt.o
 i686-elf-gcc -ffreestanding -c keyboard.c -o keyboard.o
-i686-elf-gcc -ffreestanding -c disk.c     -o disk.o
-i686-elf-gcc -ffreestanding -c fs.c       -o fs.o
-i686-elf-gcc -ffreestanding -c shell.c    -o shell.o
-i686-elf-gcc -ffreestanding -c kernel.c   -o kernel.o
+i686-elf-gcc -ffreestanding -c disk.c -o disk.o
+i686-elf-gcc -ffreestanding -c fs.c -o fs.o
+i686-elf-gcc -ffreestanding -c shell.c -o shell.o
+i686-elf-gcc -ffreestanding -c kernel.c -o kernel.o
 
-# Assemble the kernel-side asm (ELF objects, link with C)
+Assemble the kernel-side asm (ELF objects, link with C)
+
 nasm -f elf32 kernel_entry.asm -o kernel_entry.o
-nasm -f elf32 idt_load.asm     -o idt_load.o
-nasm -f elf32 isr.asm          -o isr.o
-nasm -f elf32 isr_kb.asm       -o isr_kb.o
+nasm -f elf32 idt_load.asm -o idt_load.o
+nasm -f elf32 isr.asm -o isr.o
+nasm -f elf32 isr_kb.asm -o isr_kb.o
 
-# Link the kernel
-i686-elf-ld -T linker.ld -o kernel.elf \
-    kernel_entry.o kernel.o screen.o idt.o idt_load.o isr.o \
-    keyboard.o isr_kb.o disk.o fs.o shell.o
+Link the kernel
 
-# Flatten to raw binary
+i686-elf-ld -T linker.ld -o kernel.elf
+kernel_entry.o kernel.o screen.o idt.o idt_load.o isr.o
+keyboard.o isr_kb.o disk.o fs.o shell.o
+
+Flatten to raw binary
+
 objcopy -O binary kernel.elf kernel.bin
 
-# Assemble the bootloader (flat binary, not ELF)
+Assemble the bootloader (flat binary, not ELF)
+
 nasm -f bin boot.asm -o boot.bin
 
-# Build the final disk image
+Build the final disk image
+
 cat boot.bin kernel.bin > os-image.bin
 truncate -s 5M os-image.bin
-```
+
 
 ### Running
 
-```bash
 qemu-system-x86_64 -drive file=os-image.bin,format=raw
-```
+
 
 ## Roadmap
 
-- [ ] Directory support in SimorghFS
+- [x] Directory support in SimorghFS
 - [ ] More shell commands (`mv`, `cp`)
 - [ ] A simple memory allocator
 - [ ] User-mode / Ring 3 support
@@ -139,5 +163,3 @@ qemu-system-x86_64 -drive file=os-image.bin,format=raw
 ## License
 
 MIT — do whatever you want with it.
-
-save: Ctrl+O Enter Ctrl+X
