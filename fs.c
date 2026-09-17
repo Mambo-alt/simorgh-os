@@ -2,14 +2,20 @@
 #include "disk.h"
 #include "screen.h"
 
+#define FS_ROOT 255
+#define FS_TABLE_SECTORS 2
+
 struct file_entry {
     char name[MAX_FILENAME];
     unsigned int start_lba;
     unsigned int size;
     unsigned char used;
+    unsigned char type;
+    unsigned char parent;
 };
 
 static struct file_entry files[MAX_FILES];
+static int cwd = -1;
 
 static int str_eq(const char *a, const char *b) {
     int i = 0;
@@ -42,187 +48,240 @@ static int name_valid(const char *name) {
     return 1;
 }
 
+static unsigned char cwd_byte(void) {
+    return (cwd == -1) ? FS_ROOT : (unsigned char)cwd;
+}
+
+static int find_in_cwd(const char *name) {
+    unsigned char parent = cwd_byte();
+    for (int i = 0; i < MAX_FILES; i++) {
+        if (files[i].used && files[i].parent == parent && str_eq(files[i].name, name)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
 void fs_init(void) {
-    unsigned char buffer[512];
-    int r = ata_read_sector(FS_START_LBA, buffer);
-     if (r == 0 && buffer[0] == 'S' && buffer[1] == 'F' && buffer[2] == 'S' && buffer[3] == 1) {
+    unsigned char buffer[1024];
+    int ok = 1;
+    for (int s = 0; s < FS_TABLE_SECTORS; s++) {
+        if (ata_read_sector(FS_START_LBA + s, buffer + (s * 512)) != 0) {
+            ok = 0;
+        }
+    }
+    if (ok && buffer[0] == 'S' && buffer[1] == 'F' && buffer[2] == 'S' && buffer[3] == 2) {
         unsigned char *p = buffer + 4;
         for (int i = 0; i < MAX_FILES; i++) {
             files[i].used = p[0];
+            files[i].type = p[1];
+            files[i].parent = p[2];
             for (int j = 0; j < MAX_FILENAME; j++) {
-                files[i].name[j] = p[1 + j];
+                files[i].name[j] = p[3 + j];
             }
-            files[i].start_lba = p[1 + MAX_FILENAME] | (p[2 + MAX_FILENAME] << 8) |
-                                  (p[3 + MAX_FILENAME] << 16) | (p[4 + MAX_FILENAME] << 24);
-            files[i].size = p[5 + MAX_FILENAME] | (p[6 + MAX_FILENAME] << 8) |
-                             (p[7 + MAX_FILENAME] << 16) | (p[8 + MAX_FILENAME] << 24);
-            p += (1 + MAX_FILENAME + 8);
+            unsigned char *q = p + 3 + MAX_FILENAME;
+            files[i].start_lba = q[0] | (q[1] << 8) | (q[2] << 16) | (q[3] << 24);
+            files[i].size = q[4] | (q[5] << 8) | (q[6] << 16) | (q[7] << 24);
+            p += (3 + MAX_FILENAME + 8);
         }
     } else {
         for (int i = 0; i < MAX_FILES; i++) {
             files[i].used = 0;
         }
     }
+    cwd = -1;
 }
 
 static int fs_save_table(void) {
-    unsigned char buffer[512];
-    for (int i = 0; i < 512; i++) buffer[i] = 0;
-
+    unsigned char buffer[1024];
+    for (int i = 0; i < 1024; i++) buffer[i] = 0;
     buffer[0] = 'S';
     buffer[1] = 'F';
     buffer[2] = 'S';
-    buffer[3] = 1;
-
+    buffer[3] = 2;
     unsigned char *p = buffer + 4;
     for (int i = 0; i < MAX_FILES; i++) {
         p[0] = files[i].used;
+        p[1] = files[i].type;
+        p[2] = files[i].parent;
         for (int j = 0; j < MAX_FILENAME; j++) {
-            p[1 + j] = files[i].name[j];
+            p[3 + j] = files[i].name[j];
         }
-        p[1 + MAX_FILENAME] = (unsigned char)(files[i].start_lba);
-        p[2 + MAX_FILENAME] = (unsigned char)(files[i].start_lba >> 8);
-        p[3 + MAX_FILENAME] = (unsigned char)(files[i].start_lba >> 16);
-        p[4 + MAX_FILENAME] = (unsigned char)(files[i].start_lba >> 24);
-        p[5 + MAX_FILENAME] = (unsigned char)(files[i].size);
-        p[6 + MAX_FILENAME] = (unsigned char)(files[i].size >> 8);
-        p[7 + MAX_FILENAME] = (unsigned char)(files[i].size >> 16);
-        p[8 + MAX_FILENAME] = (unsigned char)(files[i].size >> 24);
-        p += (1 + MAX_FILENAME + 8);
+        unsigned char *q = p + 3 + MAX_FILENAME;
+        q[0] = (unsigned char)(files[i].start_lba);
+        q[1] = (unsigned char)(files[i].start_lba >> 8);
+        q[2] = (unsigned char)(files[i].start_lba >> 16);
+        q[3] = (unsigned char)(files[i].start_lba >> 24);
+        q[4] = (unsigned char)(files[i].size);
+        q[5] = (unsigned char)(files[i].size >> 8);
+        q[6] = (unsigned char)(files[i].size >> 16);
+        q[7] = (unsigned char)(files[i].size >> 24);
+        p += (3 + MAX_FILENAME + 8);
     }
-
- return ata_write_sector(FS_START_LBA, buffer);
+    for (int s = 0; s < FS_TABLE_SECTORS; s++) {
+        if (ata_write_sector(FS_START_LBA + s, buffer + (s * 512)) != 0) {
+            return -1;
+        }
+    }
+    return 0;
 }
 
 int fs_create(const char *name) {
-    if (!name_valid(name)) {
-        return FS_ERR_BADNAME;
-    }
-    for (int i = 0; i < MAX_FILES; i++) {
-        if (files[i].used && str_eq(files[i].name, name)) {
-            return FS_ERR_EXISTS;
-        }
-    }
+    if (!name_valid(name)) return FS_ERR_BADNAME;
+    if (find_in_cwd(name) != -1) return FS_ERR_EXISTS;
     for (int i = 0; i < MAX_FILES; i++) {
         if (!files[i].used) {
             files[i].used = 1;
+            files[i].type = FS_TYPE_FILE;
+            files[i].parent = cwd_byte();
             str_copy(files[i].name, name);
-            files[i].start_lba = FS_START_LBA + 1 + (i * MAX_FILE_SECTORS);
+            files[i].start_lba = FS_START_LBA + FS_TABLE_SECTORS + (i * MAX_FILE_SECTORS);
             files[i].size = 0;
             if (fs_save_table() != 0) {
                 files[i].used = 0;
                 return FS_ERR_DISK;
             }
-            return FS_OK;       
+            return FS_OK;
         }
     }
     return FS_ERR_FULL;
 }
 
-int fs_write(const char *name, const unsigned char *data, unsigned int size) {
-    if (!name_valid(name)) {
-        return FS_ERR_BADNAME;    }
-
-    unsigned int max_bytes = MAX_FILE_SECTORS * 512;
-    if (size > max_bytes) {
-        return FS_ERR_TOOLARGE;
-    }
-
+int fs_mkdir(const char *name) {
+    if (!name_valid(name)) return FS_ERR_BADNAME;
+    if (find_in_cwd(name) != -1) return FS_ERR_EXISTS;
     for (int i = 0; i < MAX_FILES; i++) {
-        if (files[i].used && str_eq(files[i].name, name)) {
-            unsigned int sectors = size ? ((size + 511) / 512) : 0;
-            unsigned char buffer[512];
-            unsigned int written = 0;
-
-            for (unsigned int s = 0; s < sectors; s++) {
-                for (int j = 0; j < 512; j++) {
-                    if (written < size) {
-                        buffer[j] = data[written];
-                        written++;
-                    } else {
-                        buffer[j] = 0;
-                    }
-                }
-                if (ata_write_sector(files[i].start_lba + s, buffer) != 0) {
-                    return FS_ERR_DISK;
-                }
-            }
-
-            files[i].size = size;
+        if (!files[i].used) {
+            files[i].used = 1;
+            files[i].type = FS_TYPE_DIR;
+            files[i].parent = cwd_byte();
+            str_copy(files[i].name, name);
+            files[i].start_lba = 0;
+            files[i].size = 0;
             if (fs_save_table() != 0) {
+                files[i].used = 0;
                 return FS_ERR_DISK;
             }
             return FS_OK;
         }
     }
-    return FS_ERR_NOFILE;
+    return FS_ERR_FULL;
+}
+
+int fs_chdir(const char *name) {
+    if (str_eq(name, ".")) return FS_OK;
+    if (str_eq(name, "/")) { cwd = -1; return FS_OK; }
+    if (str_eq(name, "..")) {
+        if (cwd == -1) return FS_OK;
+        unsigned char parent = files[cwd].parent;
+        cwd = (parent == FS_ROOT) ? -1 : (int)parent;
+        return FS_OK;
+    }
+    int idx = find_in_cwd(name);
+    if (idx == -1) return FS_ERR_NOFILE;
+    if (files[idx].type != FS_TYPE_DIR) return FS_ERR_NOTDIR;
+    cwd = idx;
+    return FS_OK;
+}
+
+void fs_pwd(char *buffer, unsigned int capacity) {
+    int chain[MAX_FILES];
+    int depth = 0;
+    int cur = cwd;
+    while (cur != -1 && depth < MAX_FILES) {
+        chain[depth] = cur;
+        depth++;
+        unsigned char parent = files[cur].parent;
+        cur = (parent == FS_ROOT) ? -1 : (int)parent;
+    }
+    if (depth == 0) {
+        if (capacity > 1) { buffer[0] = '/'; buffer[1] = '\0'; }
+        return;
+    }
+    unsigned int pos = 0;
+    for (int i = depth - 1; i >= 0; i--) {
+        if (pos + 1 < capacity) buffer[pos++] = '/';
+        const char *name = files[chain[i]].name;
+        int j = 0;
+        while (name[j] != '\0' && pos + 1 < capacity) {
+            buffer[pos++] = name[j];
+            j++;
+        }
+    }
+    if (pos < capacity) buffer[pos] = '\0';
+    else buffer[capacity - 1] = '\0';
+}
+
+int fs_write(const char *name, const unsigned char *data, unsigned int size) {
+    if (!name_valid(name)) return FS_ERR_BADNAME;
+    unsigned int max_bytes = MAX_FILE_SECTORS * 512;
+    if (size > max_bytes) return FS_ERR_TOOLARGE;
+    int idx = find_in_cwd(name);
+    if (idx == -1) return FS_ERR_NOFILE;
+    if (files[idx].type != FS_TYPE_FILE) return FS_ERR_ISDIR;
+    unsigned int sectors = size ? ((size + 511) / 512) : 0;
+    unsigned char buffer[512];
+    unsigned int written = 0;
+    for (unsigned int s = 0; s < sectors; s++) {
+        for (int j = 0; j < 512; j++) {
+            if (written < size) { buffer[j] = data[written]; written++; }
+            else buffer[j] = 0;
+        }
+        if (ata_write_sector(files[idx].start_lba + s, buffer) != 0) return FS_ERR_DISK;
+    }
+    files[idx].size = size;
+    if (fs_save_table() != 0) return FS_ERR_DISK;
+    return FS_OK;
 }
 
 int fs_read(const char *name, unsigned char *buffer, unsigned int buffer_capacity, unsigned int *size) {
-    if (!name_valid(name)) {
-        return FS_ERR_BADNAME;
-    }
-
-    for (int i = 0; i < MAX_FILES; i++) {
-        if (files[i].used && str_eq(files[i].name, name)) {
-            if (files[i].size > buffer_capacity) {
-                return FS_ERR_TOOBIG_BUFFER;
-            }
-
-            unsigned int sectors = files[i].size ? ((files[i].size + 511) / 512) : 0;
-            unsigned int read_count = 0;
-
-            for (unsigned int s = 0; s < sectors; s++) {
-                unsigned char sector_buf[512];
-                if (ata_read_sector(files[i].start_lba + s, sector_buf) != 0) {
-                    return FS_ERR_DISK;
-                }
-                for (int j = 0; j < 512; j++) {
-                    if (read_count < files[i].size) {
-                        buffer[read_count] = sector_buf[j];
-                        read_count++;
-                    }
-                }
-            }
-
-            *size = files[i].size;
-            return FS_OK;
+    if (!name_valid(name)) return FS_ERR_BADNAME;
+    int idx = find_in_cwd(name);
+    if (idx == -1) return FS_ERR_NOFILE;
+    if (files[idx].type != FS_TYPE_FILE) return FS_ERR_ISDIR;
+    if (files[idx].size > buffer_capacity) return FS_ERR_TOOBIG_BUFFER;
+    unsigned int sectors = files[idx].size ? ((files[idx].size + 511) / 512) : 0;
+    unsigned int read_count = 0;
+    for (unsigned int s = 0; s < sectors; s++) {
+        unsigned char sector_buf[512];
+        if (ata_read_sector(files[idx].start_lba + s, sector_buf) != 0) return FS_ERR_DISK;
+        for (int j = 0; j < 512; j++) {
+            if (read_count < files[idx].size) { buffer[read_count] = sector_buf[j]; read_count++; }
         }
     }
-    return FS_ERR_NOFILE;
+    *size = files[idx].size;
+    return FS_OK;
 }
 
 int fs_delete(const char *name) {
-    if (!name_valid(name)) {
-        return FS_ERR_BADNAME;
-    }
-
-    for (int i = 0; i < MAX_FILES; i++) {
-        if (files[i].used && str_eq(files[i].name, name)) {
-            files[i].used = 0;
-            files[i].name[0] = '\0';
-            files[i].size = 0;
-            if (fs_save_table() != 0) {
-                return FS_ERR_DISK;
-            }
-            return FS_OK;
+    if (!name_valid(name)) return FS_ERR_BADNAME;
+    int idx = find_in_cwd(name);
+    if (idx == -1) return FS_ERR_NOFILE;
+    if (files[idx].type == FS_TYPE_DIR) {
+        unsigned char parent = (unsigned char)idx;
+        for (int i = 0; i < MAX_FILES; i++) {
+            if (files[i].used && files[i].parent == parent) return FS_ERR_NOTEMPTY;
         }
     }
-    return FS_ERR_NOFILE;
+    files[idx].used = 0;
+    files[idx].name[0] = '\0';
+    files[idx].size = 0;
+    if (fs_save_table() != 0) return FS_ERR_DISK;
+    return FS_OK;
 }
 
 void fs_list(void) {
     int any = 0;
+    unsigned char parent = cwd_byte();
     for (int i = 0; i < MAX_FILES; i++) {
-        if (files[i].used) {
+        if (files[i].used && files[i].parent == parent) {
             print(files[i].name);
+            if (files[i].type == FS_TYPE_DIR) print("/");
             print("\n");
             any = 1;
         }
     }
-    if (!any) {
-        print("(no files)\n");
-    }
+    if (!any) print("(empty)\n");
 }
 
 static void report(const char *test, int ok) {
@@ -269,6 +328,30 @@ void fs_selftest(void) {
 
     r = fs_read("t0.txt", buf, 512, &size);
     report("zero-size read ok", r == FS_OK && size == 0);
+
+    r = fs_mkdir("sub");
+    report("mkdir sub", r == FS_OK);
+
+    r = fs_mkdir("sub");
+    report("duplicate mkdir rejected", r == FS_ERR_EXISTS);
+
+    r = fs_chdir("sub");
+    report("chdir into sub", r == FS_OK);
+
+    r = fs_create("inside.txt");
+    report("create file inside sub", r == FS_OK);
+
+    r = fs_read("t1.txt", buf, 512, &size);
+    report("root file hidden from sub", r == FS_ERR_NOFILE);
+
+    r = fs_chdir("..");
+    report("chdir back to root", r == FS_OK);
+
+    r = fs_read("t1.txt", buf, 512, &size);
+    report("t1.txt visible again at root", r == FS_OK);
+
+    r = fs_delete("sub");
+    report("rmdir non-empty rejected", r == FS_ERR_NOTEMPTY);
 
     print("Self-test complete.\n");
 }

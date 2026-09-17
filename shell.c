@@ -56,11 +56,18 @@ static void print_fs_error(int code) {
     if (code == FS_ERR_BADNAME) { print("Error: invalid filename.\n"); return; }
     if (code == FS_ERR_TOOBIG_BUFFER) { print("Error: file too large for buffer.\n"); return; }
     if (code == FS_ERR_DISK) { print("Error: disk error.\n"); return; }
+    if (code == FS_ERR_NOTDIR) { print("Error: not a directory.\n"); return; }
+    if (code == FS_ERR_ISDIR) { print("Error: is a directory.\n"); return; }
+    if (code == FS_ERR_NOTEMPTY) { print("Error: directory not empty.\n"); return; }
     print("Error: filesystem error.\n");
 }
 
 void shell_prompt(void) {
-    print("\nsimorgh> ");
+    char path[128];
+    fs_pwd(path, sizeof(path));
+    print("\nsimorgh:");
+    print(path);
+    print("> ");
     set_input_boundary();
 }
 
@@ -80,16 +87,19 @@ void shell_execute(char *line) {
 
     if (str_eq(line, "help")) {
         print("Commands:\n");
-        print("  help              - show this list\n");
-        print("  info              - show OS info\n");
-        print("  clear             - clear the screen\n");
-        print("  echo <text>       - print text\n");
-        print("  ls                - list files\n");
-        print("  cat <file>        - show file content\n");
-        print("  write <file> <t>  - create/overwrite file with text\n");
-        print("  rm <file>         - delete a file\n");
-        print("  fstest            - run filesystem self-test\n");
-        print("  reboot            - restart the system\n");
+        print("  help            - show this list\n");
+        print("  info            - show OS info\n");
+        print("  clear           - clear the screen\n");
+        print("  echo <text>     - print text\n");
+        print("  ls              - list files/dirs\n");
+        print("  cat <file>      - show file content\n");
+        print("  write <file> <t>- create/overwrite file with text\n");
+        print("  rm <name>       - delete a file or empty dir\n");
+        print("  mkdir <name>    - create a directory\n");
+        print("  cd <name>       - change directory (.. or / supported)\n");
+        print("  pwd             - print current directory\n");
+        print("  fstest          - run filesystem self-test\n");
+        print("  reboot          - restart the system\n");
         shell_prompt();
         return;
     }
@@ -124,7 +134,17 @@ void shell_execute(char *line) {
         return;
     }
 
-    if (str_eq(line, "cat") || str_eq(line, "write") || str_eq(line, "rm")) {
+    if (str_eq(line, "pwd")) {
+        char path[128];
+        fs_pwd(path, sizeof(path));
+        print(path);
+        print("\n");
+        shell_prompt();
+        return;
+    }
+
+    if (str_eq(line, "cat") || str_eq(line, "write") || str_eq(line, "rm") ||
+        str_eq(line, "mkdir") || str_eq(line, "cd")) {
         print("Error: invalid argument.\n");
         shell_prompt();
         return;
@@ -150,14 +170,12 @@ void shell_execute(char *line) {
         char *rest = line + 6;
         int i = 0;
         while (rest[i] != '\0' && rest[i] != ' ') i++;
-
         if (rest[i] == '\0') {
             print("Error: invalid argument.\n");
         } else {
             rest[i] = '\0';
             char *filename = rest;
             char *content = rest + i + 1;
-
             int r = fs_create(filename);
             if (r != FS_OK && r != FS_ERR_EXISTS) {
                 print_fs_error(r);
@@ -178,8 +196,30 @@ void shell_execute(char *line) {
         char *filename = line + 3;
         int r = fs_delete(filename);
         if (r == FS_OK) {
-            print("File deleted.\n");
+            print("Deleted.\n");
         } else {
+            print_fs_error(r);
+        }
+        shell_prompt();
+        return;
+    }
+
+    if (starts_with(line, "mkdir ")) {
+        char *dirname = line + 6;
+        int r = fs_mkdir(dirname);
+        if (r == FS_OK) {
+            print("Directory created.\n");
+        } else {
+            print_fs_error(r);
+        }
+        shell_prompt();
+        return;
+    }
+
+    if (starts_with(line, "cd ")) {
+        char *dirname = line + 3;
+        int r = fs_chdir(dirname);
+        if (r != FS_OK) {
             print_fs_error(r);
         }
         shell_prompt();
