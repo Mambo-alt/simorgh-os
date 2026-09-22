@@ -33,4 +33,9 @@ int fs_mkdir(const char *name);
 int fs_chdir(const char *name);
 void fs_pwd(char *buffer, unsigned int capacity);
 
+int fs_move(const char *name, const char *dest);
+int fs_copy(const char *name, const char *dest);
+int fs_complete(const char *prefix, char *out, unsigned int out_cap);
+void fs_list_prefix(const char *prefix);
+
 #endif

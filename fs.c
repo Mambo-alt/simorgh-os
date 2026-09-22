@@ -270,6 +270,146 @@ int fs_delete(const char *name) {
     return FS_OK;
 }
 
+int fs_move(const char *name, const char *dest) {
+    if (!name_valid(name)) return FS_ERR_BADNAME;
+    int idx = find_in_cwd(name);
+    if (idx == -1) return FS_ERR_NOFILE;
+
+    int destidx = find_in_cwd(dest);
+    if (destidx != -1 && files[destidx].type == FS_TYPE_DIR) {
+        if (destidx == idx) return FS_ERR_EXISTS;
+        unsigned char destparent = (unsigned char)destidx;
+        for (int i = 0; i < MAX_FILES; i++) {
+            if (files[i].used && files[i].parent == destparent && str_eq(files[i].name, files[idx].name)) {
+                return FS_ERR_EXISTS;
+            }
+        }
+        files[idx].parent = destparent;
+        if (fs_save_table() != 0) return FS_ERR_DISK;
+        return FS_OK;
+    }
+
+    if (destidx != -1) return FS_ERR_EXISTS;
+    if (!name_valid(dest)) return FS_ERR_BADNAME;
+    str_copy(files[idx].name, dest);
+    if (fs_save_table() != 0) return FS_ERR_DISK;
+    return FS_OK;
+}
+
+int fs_copy(const char *name, const char *dest) {
+    if (!name_valid(name)) return FS_ERR_BADNAME;
+    int idx = find_in_cwd(name);
+    if (idx == -1) return FS_ERR_NOFILE;
+    if (files[idx].type != FS_TYPE_FILE) return FS_ERR_ISDIR;
+
+    unsigned char target_parent = cwd_byte();
+    char target_name[MAX_FILENAME];
+    str_copy(target_name, files[idx].name);
+
+    int destidx = find_in_cwd(dest);
+    if (destidx != -1 && files[destidx].type == FS_TYPE_DIR) {
+        target_parent = (unsigned char)destidx;
+    } else {
+        if (!name_valid(dest)) return FS_ERR_BADNAME;
+        str_copy(target_name, dest);
+    }
+
+    for (int i = 0; i < MAX_FILES; i++) {
+        if (files[i].used && files[i].parent == target_parent && str_eq(files[i].name, target_name)) {
+            return FS_ERR_EXISTS;
+        }
+    }
+
+    int newidx = -1;
+    for (int i = 0; i < MAX_FILES; i++) {
+        if (!files[i].used) { newidx = i; break; }
+    }
+    if (newidx == -1) return FS_ERR_FULL;
+
+    files[newidx].used = 1;
+    files[newidx].type = FS_TYPE_FILE;
+    files[newidx].parent = target_parent;
+    str_copy(files[newidx].name, target_name);
+    files[newidx].start_lba = FS_START_LBA + FS_TABLE_SECTORS + (newidx * MAX_FILE_SECTORS);
+    files[newidx].size = 0;
+
+    unsigned int size = files[idx].size;
+    unsigned int sectors = size ? ((size + 511) / 512) : 0;
+    unsigned char buf[512];
+    for (unsigned int s = 0; s < sectors; s++) {
+        if (ata_read_sector(files[idx].start_lba + s, buf) != 0) {
+            files[newidx].used = 0;
+            return FS_ERR_DISK;
+        }
+        if (ata_write_sector(files[newidx].start_lba + s, buf) != 0) {
+            files[newidx].used = 0;
+            return FS_ERR_DISK;
+        }
+    }
+    files[newidx].size = size;
+    if (fs_save_table() != 0) {
+        files[newidx].used = 0;
+        return FS_ERR_DISK;
+    }
+    return FS_OK;
+}
+
+int fs_complete(const char *prefix, char *out, unsigned int out_cap) {
+    unsigned char parent = cwd_byte();
+    int plen = str_len(prefix);
+    int count = 0, first = -1;
+
+    for (int i = 0; i < MAX_FILES; i++) {
+        if (!files[i].used) continue;
+        if (files[i].parent != parent) continue;
+        int ok = 1;
+        for (int j = 0; j < plen; j++) {
+            if (files[i].name[j] == '\0' || files[i].name[j] != prefix[j]) {
+                ok = 0; break;
+            }
+        }
+        if (!ok) continue;
+        count++;
+        if (first < 0) first = i;
+    }
+
+    if (count == 0) return -1;
+    if (count == 1) {
+        const char *nm = files[first].name;
+        unsigned int k = 0;
+        while (nm[k] && k + 1 < out_cap) { out[k] = nm[k]; k++; }
+        if (files[first].type == FS_TYPE_DIR && k + 1 < out_cap) {
+            out[k++] = '/';
+        }
+        out[k] = '\0';
+        return 0;
+    }
+    return count;
+}
+
+void fs_list_prefix(const char *prefix) {
+    unsigned char parent = cwd_byte();
+    int plen = str_len(prefix);
+    int any = 0;
+
+    for (int i = 0; i < MAX_FILES; i++) {
+        if (!files[i].used) continue;
+        if (files[i].parent != parent) continue;
+        int ok = 1;
+        for (int j = 0; j < plen; j++) {
+            if (files[i].name[j] == '\0' || files[i].name[j] != prefix[j]) {
+                ok = 0; break;
+            }
+        }
+        if (!ok) continue;
+        print(files[i].name);
+        if (files[i].type == FS_TYPE_DIR) print("/");
+        print("  ");
+        any = 1;
+    }
+    if (any) print("\n");
+}
+
 void fs_list(void) {
     int any = 0;
     unsigned char parent = cwd_byte();
@@ -352,6 +492,16 @@ void fs_selftest(void) {
 
     r = fs_delete("sub");
     report("rmdir non-empty rejected", r == FS_ERR_NOTEMPTY);
+
+    r = fs_move("t1.txt", "moved.txt");
+    report("mv rename ok", r == FS_OK);
+
+    r = fs_copy("moved.txt", "copy.txt");
+    report("cp file ok", r == FS_OK);
+
+    r = fs_read("copy.txt", buf, 512, &size);
+    buf[size] = 0;
+    report("copy content matches", r == FS_OK && str_eq((char*)buf, "abc"));
 
     print("Self-test complete.\n");
 }
