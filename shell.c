@@ -454,7 +454,7 @@ void shell_execute(char *line) {
 
     if (str_eq(line, "info")) {
         print("Simorgh OS\n");
-        print("Version 0.4.1\n");
+        print("Version 0.4\n");
         print("Architecture: x86\n");
         print("Kernel: Simorgh Kernel\n");
         print("Filesystem: SimorghFS\n");
