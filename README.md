@@ -1,146 +1,61 @@
 # Simorgh OS
 
-Simorgh (سیمرغ) is a small x86 operating system I'm building from scratch to learn how computers actually work underneath the usual layers.
+Simorgh OS is a small, from-scratch x86 operating system by Mambo. It boots from a raw disk image, enters 32-bit protected mode, initializes a minimal kernel, and provides an interactive shell with a simple persistent filesystem.
 
-There is no Linux kernel, libc, or existing OS underneath it. The bootloader, kernel, interrupt handling, keyboard input, disk driver, filesystem, and shell are all part of this project.
+Simorgh is an experimental project, not a replacement for Linux or Windows. Its goal is to make the path from boot sector to usable system understandable, testable, and gradually more capable.
 
-The goal isn't to build a replacement for Linux or Windows. I mainly want to understand what happens between turning on a computer and getting an actual operating system running.
+## Why Simorgh?
 
-> «Built from scratch, one part at a time.»
+I am building Simorgh to understand an operating system by building its layers myself: boot, interrupts, hardware I/O, a shell, and storage. Terry Davis's independent approach to creating a personal operating system is an inspiration. Simorgh is its own project, with its own design and code.
 
-## What is working?
+The aim is not to add features as quickly as possible. Each layer should remain understandable, and new features should be built on a stable foundation.
 
-Simorgh currently boots from a raw disk image in QEMU and enters 32-bit Protected Mode.
+## How it works
 
-It has its own:
+1. `boot.asm` runs as a BIOS boot sector, reads the kernel from the disk image, sets up a GDT, and switches the CPU to 32-bit protected mode.
+2. `kernel_entry.asm` clears the kernel's `.bss` section and calls `kernel_main()`.
+3. The kernel initializes VGA text output, the keyboard, the interrupt table, and the shell.
+4. Keyboard interrupts add key events to a queue. The main loop consumes those events and passes them to the shell.
+5. The shell handles commands and line editing. File commands use SimorghFS, which stores a small file table and file data at fixed disk locations.
 
-- x86 bootloader
-- C kernel
-- VGA text-mode driver
-- IDT and interrupt handling
-- PIC setup
-- PS/2 keyboard driver
-- ATA PIO disk driver
-- filesystem
-- command-line shell
+This is a deliberately small design. It is not yet a general-purpose operating system.
 
-The shell can currently work with files and directories:
+## Current capabilities
 
-`text
-simorgh:/> mkdir docs
-Directory created.
+- BIOS boot into 32-bit protected mode.
+- VGA text output and scrollback.
+- Keyboard input, line editing, command history, and filename completion.
+- An interactive shell with commands such as `help`, `info`, `ls`, `cat`, `write`, `mkdir`, `cd`, `pwd`, `mv`, `cp`, and `rm`.
+- A small persistent filesystem with files and directories.
+- Build-time checks for boot-sector size, boot signature, and kernel size.
+- A guard against moving a directory into itself or its descendants.
 
-simorgh:/> cd docs
-simorgh:/docs> write notes.txt hello simorgh
-File written.
+## Build and run
 
-simorgh:/docs> ls
-notes.txt
+You need an `i686-elf` cross-toolchain, NASM, GNU Make, `objcopy`, and QEMU available in your environment.
 
-simorgh:/docs> cat notes.txt
-hello simorgh
-Some of the available commands are:
-help
-info
-clear
-echo
-ls
-cat
-write
-rm
-mkdir
-cd
-pwd
-fstest
-reboot
-The filesystem also keeps its data on the disk image, so files can survive a reboot.
-How it works
-The boot process currently looks roughly like this:
-BIOS
- │
- ▼
-Bootloader
- │
- ├── Load kernel
- ├── Set up GDT
- └── Enter 32-bit Protected Mode
-        │
-        ▼
-     C Kernel
-        │
-        ├── VGA
-        ├── IDT / PIC
-        ├── Keyboard
-        ├── ATA PIO
-        ├── SimorghFS
-        └── Shell
-The project is deliberately kept small so I can follow the path from the CPU starting execution all the way to the shell.
-Project structure
-boot.asm          Bootloader
-kernel_entry.asm  Kernel entry point
+```sh
+make clean
+make
+make run
+```
 
-kernel.c          Main kernel code
+`make` produces `os-image.bin`. `make run` starts the image in QEMU.
 
-screen.c/h        VGA text-mode driver
+The bootloader currently reads a fixed maximum of 64 kernel sectors (32 KiB). The build check must reject a kernel that exceeds that limit.
 
-idt.c/h           Interrupt Descriptor Table
-idt_load.asm      IDT loading
-isr.asm           CPU exception handlers
+## Limitations
 
-keyboard.c/h      PS/2 keyboard driver
-isr_kb.asm        Keyboard IRQ handler
+- This is an early experimental system. Test it in QEMU; do not assume it is ready for everyday use or real hardware.
+- The kernel-loading limit is currently fixed rather than determined dynamically.
+- SimorghFS has a small, fixed number of entries and a fixed per-file size limit.
+- The filesystem is not a mature, crash-safe filesystem.
+- There is no multitasking, user-mode process isolation, networking, or graphical desktop yet.
 
-disk.c/h          ATA PIO disk driver
+## Project status
 
-fs.c/h            SimorghFS filesystem
+Development currently focuses on reliability: keeping builds reproducible, preventing filesystem corruption, and making failures easier to diagnose. New features will be added when the layers they depend on are stable enough.
 
-shell.c/h         Command shell
+## Author
 
-linker.ld         Kernel memory layout
-Building
-Requirements
-You'll need:
-i686-elf-gcc
-i686-elf-binutils
-nasm
-qemu-system-x86_64
-1. Compile the C sources
-i686-elf-gcc -ffreestanding -c screen.c -o screen.o
-i686-elf-gcc -ffreestanding -c idt.c -o idt.o
-i686-elf-gcc -ffreestanding -c keyboard.c -o keyboard.o
-i686-elf-gcc -ffreestanding -c disk.c -o disk.o
-i686-elf-gcc -ffreestanding -c fs.c -o fs.o
-i686-elf-gcc -ffreestanding -c shell.c -o shell.o
-i686-elf-gcc -ffreestanding -c kernel.c -o kernel.o
-2. Assemble the kernel-side assembly
-nasm -f elf32 kernel_entry.asm -o kernel_entry.o
-nasm -f elf32 idt_load.asm -o idt_load.o
-nasm -f elf32 isr.asm -o isr.o
-nasm -f elf32 isr_kb.asm -o isr_kb.o
-3. Link the kernel
-i686-elf-ld -T linker.ld -o kernel.elf \
-  kernel_entry.o kernel.o screen.o idt.o idt_load.o \
-  isr.o keyboard.o isr_kb.o disk.o fs.o shell.o
-4. Convert it to a binary
-objcopy -O binary kernel.elf kernel.bin
-5. Build the bootloader and disk image
-nasm -f bin boot.asm -o boot.bin
-
-cat boot.bin kernel.bin > os-image.bin
-truncate -s 5M os-image.bin
-6. Run it in QEMU
-qemu-system-x86_64 -drive file=os-image.bin,format=raw
-Current state
-Simorgh is still a learning project and is nowhere near being a general-purpose operating system.
-That's intentional.
-Right now I'm focusing on getting the low-level pieces working correctly before trying to add more advanced features.
-Some things I want to work on next:
-Improve the filesystem
-Add more shell commands
-Add a simple memory allocator
-Add user mode / Ring 3
-Add basic multitasking
-Improve hardware support
-The roadmap will probably change as the project grows.
-Why Simorgh?
-The name comes from the Simorgh (سیمرغ), a legendary bird in Persian mythology.
+Created by Mambo.

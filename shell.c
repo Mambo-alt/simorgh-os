@@ -389,6 +389,7 @@ static void print_fs_error(int code) {
     if (code == FS_ERR_NOTDIR) { print("Error: not a directory.\n"); return; }
     if (code == FS_ERR_ISDIR) { print("Error: is a directory.\n"); return; }
     if (code == FS_ERR_NOTEMPTY) { print("Error: directory not empty.\n"); return; }
+    if (code == FS_ERR_CYCLE) { print("Error: cannot move a directory into itself or its child.\n"); return; }
     print("Error: filesystem error.\n");
 }
 
@@ -454,7 +455,8 @@ void shell_execute(char *line) {
 
     if (str_eq(line, "info")) {
         print("Simorgh OS\n");
-        print("Version 0.4\n");
+	print("Release: stability update\n");
+        print("Version 0.4.1\n");
         print("Architecture: x86\n");
         print("Kernel: Simorgh Kernel\n");
         print("Filesystem: SimorghFS\n");

@@ -276,9 +276,28 @@ int fs_move(const char *name, const char *dest) {
     if (idx == -1) return FS_ERR_NOFILE;
 
     int destidx = find_in_cwd(dest);
-    if (destidx != -1 && files[destidx].type == FS_TYPE_DIR) {
-        if (destidx == idx) return FS_ERR_EXISTS;
-        unsigned char destparent = (unsigned char)destidx;
+if (destidx != -1 && files[destidx].type == FS_TYPE_DIR) {
+    if (destidx == idx) return FS_ERR_CYCLE;
+
+    if (files[idx].type == FS_TYPE_DIR) {
+        int parent = destidx;
+
+        for (int depth = 0; depth < MAX_FILES; depth++) {
+            if (parent == idx) return FS_ERR_CYCLE;
+
+            unsigned char next = files[parent].parent;
+            if (next == FS_ROOT) break;
+            if (next >= MAX_FILES || !files[next].used ||
+                files[next].type != FS_TYPE_DIR) {
+                return FS_ERR_CYCLE;
+            }
+
+            parent = (int)next;
+            if (depth == MAX_FILES - 1) return FS_ERR_CYCLE;
+        }
+    }
+
+    unsigned char destparent = (unsigned char)destidx;
         for (int i = 0; i < MAX_FILES; i++) {
             if (files[i].used && files[i].parent == destparent && str_eq(files[i].name, files[idx].name)) {
                 return FS_ERR_EXISTS;

@@ -20,6 +20,7 @@
 #define FS_ERR_NOTDIR -8
 #define FS_ERR_ISDIR -9
 #define FS_ERR_NOTEMPTY -10
+#define FS_ERR_CYCLE -11
 
 void fs_init(void);
 int fs_create(const char *name);

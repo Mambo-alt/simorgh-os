@@ -5,7 +5,7 @@
 KERNEL_ADDR_OFF  equ 0x0000
 KERNEL_ADDR_SEG  equ 0x1000      ; physical address = 0x10000
 KERNEL_LBA       equ 1           ; sector 2 = LBA 1 (bootloader = LBA 0)
-KERNEL_SECTORS   equ 64          ; 64 * 512 = 32KB
+KERNEL_SECTORS   equ 64         ; 64 * 512 = 32KB
 KERNEL_ENTRY     equ 0x10000     ; where to jump after entering PM
 
 start:
