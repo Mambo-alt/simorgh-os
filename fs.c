@@ -186,30 +186,46 @@ int fs_chdir(const char *name) {
 
 void fs_pwd(char *buffer, unsigned int capacity) {
     int chain[MAX_FILES];
+    unsigned char seen[MAX_FILES] = {0};
     int depth = 0;
     int cur = cwd;
-    while (cur != -1 && depth < MAX_FILES) {
-        chain[depth] = cur;
-        depth++;
+    unsigned int pos = 0;
+
+    if (!buffer || capacity == 0) return;
+    buffer[0] = '\0';
+
+    while (cur != -1) {
+        if (cur < 0 || cur >= MAX_FILES) return;
+        if (!files[cur].used || files[cur].type != FS_TYPE_DIR) return;
+        if (seen[cur] || depth >= MAX_FILES) return;
+
+        seen[cur] = 1;
+        chain[depth++] = cur;
+
         unsigned char parent = files[cur].parent;
         cur = (parent == FS_ROOT) ? -1 : (int)parent;
     }
+
     if (depth == 0) {
-        if (capacity > 1) { buffer[0] = '/'; buffer[1] = '\0'; }
+        if (capacity > 1) {
+            buffer[0] = '/';
+            buffer[1] = '\0';
+        }
         return;
     }
-    unsigned int pos = 0;
+
     for (int i = depth - 1; i >= 0; i--) {
         if (pos + 1 < capacity) buffer[pos++] = '/';
+
         const char *name = files[chain[i]].name;
-        int j = 0;
-        while (name[j] != '\0' && pos + 1 < capacity) {
+        for (unsigned int j = 0;
+             j < MAX_FILENAME && name[j] != '\0' && pos + 1 < capacity;
+             j++) {
             buffer[pos++] = name[j];
-            j++;
         }
     }
-    if (pos < capacity) buffer[pos] = '\0';
-    else buffer[capacity - 1] = '\0';
+
+    buffer[pos] = '\0';
 }
 
 int fs_write(const char *name, const unsigned char *data, unsigned int size) {
@@ -374,6 +390,9 @@ int fs_copy(const char *name, const char *dest) {
 }
 
 int fs_complete(const char *prefix, char *out, unsigned int out_cap) {
+    if (!prefix || !out || out_cap == 0) return -1;
+    out[0] = '\0';
+
     unsigned char parent = cwd_byte();
     int plen = str_len(prefix);
     int count = 0, first = -1;
@@ -455,7 +474,21 @@ void fs_selftest(void) {
     int r;
 
     print("Running filesystem self-test...\n");
+{
+    char guard = 'X';
+    char tiny[1] = {'X'};
 
+    fs_pwd(&guard, 0);
+    report("pwd zero capacity leaves buffer unchanged", guard == 'X');
+
+    fs_pwd(tiny, sizeof(tiny));
+    report("pwd one-byte buffer is terminated", tiny[0] == '\0');
+
+    r = fs_complete("", &guard, 0);
+
+    report("completion zero capacity rejected",
+           r == -1 && guard == 'X');
+}
     r = fs_create("t1.txt");
     report("create t1.txt", r == FS_OK);
 
@@ -465,10 +498,16 @@ void fs_selftest(void) {
     r = fs_write("t1.txt", (unsigned char*)"abc", 3);
     report("write t1.txt", r == FS_OK);
 
+    size = 0;
     r = fs_read("t1.txt", buf, 512, &size);
-    buf[size] = 0;
-    report("read t1.txt matches", r == FS_OK && size == 3 && str_eq((char*)buf, "abc"));
 
+    if (r == FS_OK && size < sizeof(buf)) {
+    buf[size] = '\0';
+    report("read t1.txt matches",
+           size == 3 && str_eq((char*)buf, "abc"));
+    } else {
+    report("read t1.txt matches", 0);
+}
     r = fs_write("nofile.txt", (unsigned char*)"x", 1);
     report("write to missing file rejected", r == FS_ERR_NOFILE);
 
@@ -518,9 +557,16 @@ void fs_selftest(void) {
     r = fs_copy("moved.txt", "copy.txt");
     report("cp file ok", r == FS_OK);
 
+    size = 0;
     r = fs_read("copy.txt", buf, 512, &size);
-    buf[size] = 0;
-    report("copy content matches", r == FS_OK && str_eq((char*)buf, "abc"));
+
+    if (r == FS_OK && size < sizeof(buf)) {
+    buf[size] = '\0';
+    report("copy content matches",
+           size == 3 && str_eq((char*)buf, "abc"));
+    } else {
+    report("copy content matches", 0);
+    }
 
     print("Self-test complete.\n");
 }

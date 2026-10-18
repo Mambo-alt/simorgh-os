@@ -134,7 +134,7 @@ static void history_up(void) {
 if (history_count == 0) return;
     if (history_view == -1) {
         int i = 0;
-        while (line_buf[i] && i < LINE_MAX) { history_saved[i] = line_buf[i]; i++; }
+	while (i < line_len && i < LINE_MAX) { history_saved[i] = line_buf[i]; i++; }
         history_saved[i] = '\0';
     }
     int max_view = history_count - 1;
@@ -441,7 +441,7 @@ void shell_execute(char *line) {
         print("  reboot          - restart the system\n");
         print("\nKey bindings:\n");
         print("  Up/Down         - command history\n");
-        print(" Shift+Up/Down    - scroll through output");
+        print(" Shift+Up/Down    - scroll through output\n");
         print("  Left/Right      - move cursor\n");
         print("  Home/End        - jump to start/end\n");
         print("  Tab             - autocomplete filename\n");
