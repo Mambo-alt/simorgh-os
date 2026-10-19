@@ -1,4 +1,3 @@
-
 #include "screen.h"
 #include "idt.h"
 #include "keyboard.h"
@@ -6,7 +5,7 @@
 
 void kernel_main(void) {
     clear_screen();
-    print("Welcome to the Simorgh OS!\n");
+    print("Welcome to the Simorgh 0.4.1!\n");
 
     keyboard_init();
     idt_init();

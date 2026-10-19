@@ -21,6 +21,11 @@
 #define FS_ERR_ISDIR -9
 #define FS_ERR_NOTEMPTY -10
 #define FS_ERR_CYCLE -11
+#define FS_ERR_CORRUPT -12
+
+#define FS_STATE_OK    0
+#define FS_STATE_IOERR 1
+#define FS_STATE_BAD   2
 
 void fs_init(void);
 int fs_create(const char *name);
@@ -29,6 +34,8 @@ int fs_read(const char *name, unsigned char *buffer, unsigned int buffer_capacit
 int fs_delete(const char *name);
 void fs_list(void);
 void fs_selftest(void);
+int fs_status(void);
+int fs_format(void);
 
 int fs_mkdir(const char *name);
 int fs_chdir(const char *name);

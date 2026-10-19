@@ -389,6 +389,7 @@ static void print_fs_error(int code) {
     if (code == FS_ERR_NOTDIR) { print("Error: not a directory.\n"); return; }
     if (code == FS_ERR_ISDIR) { print("Error: is a directory.\n"); return; }
     if (code == FS_ERR_NOTEMPTY) { print("Error: directory not empty.\n"); return; }
+    if (code == FS_ERR_CORRUPT) { print("Error: filesystem is damaged, writes are disabled. Use 'format yes' to reset.\n"); return; }
     if (code == FS_ERR_CYCLE) { print("Error: cannot move a directory into itself or its child.\n"); return; }
     print("Error: filesystem error.\n");
 }
@@ -413,6 +414,12 @@ void shell_init(void) {
     input_max_used = 0;
     mem_zero(line_buf, LINE_MAX + 1);
 print("\nType 'help' for a list of commands.\n");
+    if (fs_status() == FS_STATE_BAD) {
+        print("Warning: filesystem is damaged or unrecognized. Writes are disabled.\n");
+        print("Use 'format yes' to reset it (all data will be lost).\n");
+    } else if (fs_status() == FS_STATE_IOERR) {
+        print("Warning: could not read the disk. Writes are disabled.\n");
+    }
     shell_prompt();
 }
 
@@ -438,6 +445,7 @@ void shell_execute(char *line) {
         print("  mv <src> <dst>  - rename, or move into a directory\n");
         print("  cp <src> <dst>  - copy a file\n");
         print("  fstest          - run filesystem self-test\n");
+        print("  format yes      - erase and reset the filesystem\n");
         print("  reboot          - restart the system\n");
         print("\nKey bindings:\n");
         print("  Up/Down         - command history\n");
@@ -621,6 +629,23 @@ if (r != FS_OK && r != FS_ERR_EXISTS) {
 
     if (str_eq(line, "fstest")) {
         fs_selftest();
+        shell_prompt();
+        return;
+    }
+
+    if (str_eq(line, "format")) {
+        print("This erases ALL files. Type 'format yes' to confirm.\n");
+        shell_prompt();
+        return;
+    }
+
+    if (str_eq(line, "format yes")) {
+        int r = fs_format();
+        if (r == FS_OK) {
+            print("Filesystem formatted.\n");
+        } else {
+            print_fs_error(r);
+        }
         shell_prompt();
         return;
     }
